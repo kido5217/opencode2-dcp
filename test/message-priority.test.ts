@@ -8,16 +8,13 @@ import { prune } from "../src/lib/messages/prune.ts";
 import { buildPriorityMap } from "../src/lib/messages/priority.ts";
 import { stripHallucinationsFromString } from "../src/lib/messages/utils.ts";
 import { createSessionState } from "../src/lib/state/state.ts";
+import { applyAnchoredNudges } from "../src/lib/nudges.ts";
+import { findToolResult } from "../src/lib/messages/shape.ts";
 import type { DcpContentPart, DcpMessage, DcpToolResultPart } from "../src/lib/types.ts";
 
 function textOf(part: DcpContentPart): string {
   return (part as { text?: string }).text ?? "";
 }
-
-// The v1 message-priority suite also covered the anchored nudge injection
-// (applyAnchoredNudges: message-mode/range-mode nudge placement). That
-// mechanism ports with ticket #15 (nudges + context limits); its seven test
-// cases are deliberately excluded here.
 
 function buildConfig(mode: "message" | "range" = "message"): DcpConfig {
   return {
@@ -504,4 +501,251 @@ test("injectMessageIds skips assistant with empty text part (issue #463)", () =>
     "",
     "empty text part should remain untouched",
   );
+});
+
+test("message-mode nudges append to existing text parts and list only earlier visible high-priority message IDs", () => {
+  const sessionID = "ses_nudge_msg_refs";
+  const messages: DcpMessage[] = [
+    buildMessage("msg-user-1", "user", repeatedWord("alpha", 6000)),
+    buildMessage("msg-assistant-1", "assistant", repeatedWord("beta", 6000)),
+    buildMessage("msg-user-2", "user", repeatedWord("gamma", 6000)),
+    buildMessage("msg-assistant-2", "assistant", repeatedWord("delta", 6000)),
+  ];
+  const state = createSessionState();
+  const config = buildConfig();
+  assignMessageRefs(state, messages);
+  state.prune.messages.byMessageId.set("msg-assistant-1", {
+    tokenCount: 999,
+    allBlockIds: [1],
+    activeBlockIds: [1],
+  });
+  state.nudges.contextLimitAnchors.add("msg-user-2");
+  const compressionPriorities = buildPriorityMap(config, state, messages);
+
+  applyAnchoredNudges(
+    state,
+    config,
+    messages,
+    {
+      system: "",
+      compressRange: "",
+      compressMessage: "",
+      contextLimitNudge: "<dcp-system-reminder>Base context nudge</dcp-system-reminder>",
+      turnNudge: "<dcp-system-reminder>Base turn nudge</dcp-system-reminder>",
+      iterationNudge: "<dcp-system-reminder>Base iteration nudge</dcp-system-reminder>",
+      manualExtension: "",
+      subagentExtension: "",
+    },
+    compressionPriorities,
+  );
+
+  assert.equal(messages[2]?.content.length, 1);
+  const injectedNudge = messages[2]?.content[0];
+  assert.equal(injectedNudge?.type, "text");
+  assert.match((injectedNudge as any).text, /\n\n<dcp-system-reminder>Base context nudge/);
+  assert.match((injectedNudge as any).text, /Message priority context:/);
+  assert.match((injectedNudge as any).text, /High-priority message IDs before this point: m0001/);
+  assert.doesNotMatch((injectedNudge as any).text, /m0002/);
+  assert.doesNotMatch((injectedNudge as any).text, /m0003/);
+  assert.doesNotMatch((injectedNudge as any).text, /m0004/);
+});
+
+test("message-mode nudges exclude protected user messages from priority guidance", () => {
+  const sessionID = "ses_nudge_protected";
+  const messages: DcpMessage[] = [
+    buildMessage("msg-user-1", "user", repeatedWord("alpha", 6000)),
+    buildMessage("msg-assistant-1", "assistant", repeatedWord("beta", 6000)),
+    buildMessage("msg-user-2", "user", repeatedWord("gamma", 6000)),
+  ];
+  const state = createSessionState();
+  const config = buildConfig();
+  config.compress.protectUserMessages = true;
+  assignMessageRefs(state, messages);
+  state.nudges.contextLimitAnchors.add("msg-user-2");
+  const compressionPriorities = buildPriorityMap(config, state, messages);
+
+  applyAnchoredNudges(
+    state,
+    config,
+    messages,
+    {
+      system: "",
+      compressRange: "",
+      compressMessage: "",
+      contextLimitNudge: "<dcp-system-reminder>Base context nudge</dcp-system-reminder>",
+      turnNudge: "<dcp-system-reminder>Base turn nudge</dcp-system-reminder>",
+      iterationNudge: "<dcp-system-reminder>Base iteration nudge</dcp-system-reminder>",
+      manualExtension: "",
+      subagentExtension: "",
+    },
+    compressionPriorities,
+  );
+
+  const injectedNudge = messages[2]?.content[0];
+  assert.equal(injectedNudge?.type, "text");
+  assert.match((injectedNudge as any).text, /High-priority message IDs before this point: m0002/);
+  assert.doesNotMatch((injectedNudge as any).text, /m0001/);
+});
+
+test("range-mode nudges append to existing text parts before tool outputs", () => {
+  const sessionID = "ses_nudge_range_tools";
+  const messages: DcpMessage[] = [
+    buildMessage("msg-user-1", "user", repeatedWord("alpha", 6000)),
+    {
+      id: "msg-assistant-1",
+      role: "assistant",
+      content: [
+        { type: "text", text: "Working summary." },
+        { type: "tool-call", id: "call-task-2", name: "task", input: { description: "demo" } },
+      ],
+    },
+    toolResultMessage("msg-tool-1", "call-task-2", "task", "task output body"),
+  ];
+  const state = createSessionState();
+  const config = buildConfig("range");
+  assignMessageRefs(state, messages);
+  state.prune.messages.activeBlockIds.add(7);
+  state.nudges.contextLimitAnchors.add("msg-assistant-1");
+
+  applyAnchoredNudges(state, config, messages, {
+    system: "",
+    compressRange: "",
+    compressMessage: "",
+    contextLimitNudge: "<dcp-system-reminder>Base context nudge</dcp-system-reminder>",
+    turnNudge: "<dcp-system-reminder>Base turn nudge</dcp-system-reminder>",
+    iterationNudge: "<dcp-system-reminder>Base iteration nudge</dcp-system-reminder>",
+    manualExtension: "",
+    subagentExtension: "",
+  });
+
+  assert.equal(messages[1]?.content.length, 2);
+  const injectedNudge = messages[1]?.content[0];
+  const toolOutput = messages[1]?.content[1];
+  assert.equal(injectedNudge?.type, "text");
+  assert.equal(toolOutput?.type, "tool-call");
+  assert.match((injectedNudge as any).text, /\n\n<dcp-system-reminder>Base context nudge/);
+  assert.match((injectedNudge as any).text, /Compressed block context:/);
+  assert.match((injectedNudge as any).text, /Active compressed blocks in this session: 1 \(b7\)/);
+  assert.equal(findToolResult(messages, "call-task-2")?.result.value, "task output body");
+});
+
+test("range-mode nudges inject only once for assistant messages with multiple text parts", () => {
+  const sessionID = "ses_nudge_range_multi_text";
+  const messages: DcpMessage[] = [
+    buildMessage("msg-user-1", "user", repeatedWord("alpha", 6000)),
+    {
+      id: "msg-assistant-1",
+      role: "assistant",
+      content: [
+        { type: "text", text: "First chunk." },
+        { type: "text", text: "Second chunk." },
+      ],
+    },
+  ];
+  const state = createSessionState();
+  const config = buildConfig("range");
+  assignMessageRefs(state, messages);
+  state.nudges.contextLimitAnchors.add("msg-assistant-1");
+
+  applyAnchoredNudges(state, config, messages, {
+    system: "",
+    compressRange: "",
+    compressMessage: "",
+    contextLimitNudge: "<dcp-system-reminder>Base context nudge</dcp-system-reminder>",
+    turnNudge: "<dcp-system-reminder>Base turn nudge</dcp-system-reminder>",
+    iterationNudge: "<dcp-system-reminder>Base iteration nudge</dcp-system-reminder>",
+    manualExtension: "",
+    subagentExtension: "",
+  });
+
+  assert.match((messages[1]?.content[0] as any).text, /Base context nudge/);
+  assert.doesNotMatch((messages[1]?.content[1] as any).text, /Base context nudge/);
+});
+
+test("range-mode nudges skip empty assistant messages to avoid prefill (issue #463)", () => {
+  const sessionID = "ses_nudge_range_empty";
+  const messages: DcpMessage[] = [
+    buildMessage("msg-user-1", "user", repeatedWord("alpha", 6000)),
+    { id: "msg-assistant-1", role: "assistant", content: [] },
+  ];
+  const state = createSessionState();
+  const config = buildConfig("range");
+  assignMessageRefs(state, messages);
+  state.nudges.contextLimitAnchors.add("msg-assistant-1");
+
+  applyAnchoredNudges(state, config, messages, {
+    system: "",
+    compressRange: "",
+    compressMessage: "",
+    contextLimitNudge: "<dcp-system-reminder>Base context nudge</dcp-system-reminder>",
+    turnNudge: "<dcp-system-reminder>Base turn nudge</dcp-system-reminder>",
+    iterationNudge: "<dcp-system-reminder>Base iteration nudge</dcp-system-reminder>",
+    manualExtension: "",
+    subagentExtension: "",
+  });
+
+  assert.equal(messages[1]?.content.length, 0);
+});
+
+test("range-mode nudges skip assistant with only pending tool parts (issue #463)", () => {
+  const sessionID = "ses_nudge_range_pending";
+  const messages: DcpMessage[] = [
+    buildMessage("msg-user-1", "user", repeatedWord("alpha", 6000)),
+    {
+      id: "msg-assistant-1",
+      role: "assistant",
+      content: [
+        { type: "tool-call", id: "call-pending-1", name: "bash", input: { command: "ls" } },
+      ],
+    },
+  ];
+  const state = createSessionState();
+  const config = buildConfig("range");
+  assignMessageRefs(state, messages);
+  state.nudges.contextLimitAnchors.add("msg-assistant-1");
+
+  applyAnchoredNudges(state, config, messages, {
+    system: "",
+    compressRange: "",
+    compressMessage: "",
+    contextLimitNudge: "<dcp-system-reminder>Base context nudge</dcp-system-reminder>",
+    turnNudge: "<dcp-system-reminder>Base turn nudge</dcp-system-reminder>",
+    iterationNudge: "<dcp-system-reminder>Base iteration nudge</dcp-system-reminder>",
+    manualExtension: "",
+    subagentExtension: "",
+  });
+
+  assert.equal(messages[1]?.content.length, 1);
+  assert.equal(messages[1]?.content[0]?.type, "tool-call");
+});
+
+test("range-mode nudges skip assistant messages with only empty text parts (issue #463)", () => {
+  const sessionID = "ses_nudge_range_empty_text";
+  const messages: DcpMessage[] = [
+    buildMessage("msg-user-1", "user", repeatedWord("alpha", 6000)),
+    {
+      id: "msg-assistant-1",
+      role: "assistant",
+      content: [{ type: "text", text: "" }],
+    },
+  ];
+  const state = createSessionState();
+  const config = buildConfig("range");
+  assignMessageRefs(state, messages);
+  state.nudges.contextLimitAnchors.add("msg-assistant-1");
+
+  applyAnchoredNudges(state, config, messages, {
+    system: "",
+    compressRange: "",
+    compressMessage: "",
+    contextLimitNudge: "",
+    turnNudge: "",
+    iterationNudge: "",
+    manualExtension: "",
+    subagentExtension: "",
+  });
+
+  // Empty text parts should not receive nudge injection
+  assert.equal(messages[1]?.content.length, 1);
+  assert.equal((messages[1]?.content[0] as any).text, "");
 });

@@ -135,6 +135,8 @@ export const runContextPipeline = async (
     messages,
     prompts.getRuntimePrompts(),
     compressionPriorities,
+    { providerId: payload.model.providerID, modelId: payload.model.id },
+    deps.storage,
   );
   injectMessageIds(state, config, messages, compressionPriorities);
   applyPendingManualTrigger(state, messages, logger);
