@@ -21,6 +21,8 @@ import { createCompressRangeTool } from "./lib/compress/range.ts";
 import { createCompressMessageTool } from "./lib/compress/message.ts";
 import type { ToolContext as CompressToolContext } from "./lib/compress/types.ts";
 import { toWithParts, type DurableMessage } from "./lib/compress/durable.ts";
+import { compressPermission } from "./lib/compress-permission.ts";
+import { getTriggerPrompt } from "./lib/manual.ts";
 
 /** Structural mirror of the host JSON value type (for the storage adapter). */
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
@@ -162,6 +164,41 @@ export default Plugin.define({
               id: context.id,
               progress: context.progress,
             }),
+        });
+      });
+    }
+
+    // v1 parity: `/dcp-compress [focus]` command (v1 registered a config
+    // command intercepted in `command.execute.before`). v2: core command via
+    // ctx.command.transform; execute is side-effect-only, so it stores the
+    // pending manual trigger and sends the trigger prompt itself — the
+    // context pipeline's applyPendingManualTrigger then rewrites the turn's
+    // user message to the pending prompt (v1's fetch/ensure preamble is
+    // absorbed by the pipeline's checkSession/ensureSessionInitialized +
+    // syncCompressPermissionState, which run when the sent prompt starts the
+    // turn; the "compress-pending" manualMode guard survives re-init).
+    if (config.commands.enabled && config.compress.permission !== "deny") {
+      void ctx.command.transform((editor) => {
+        editor.add({
+          name: "dcp-compress",
+          description: "Trigger DCP manual compression with: /dcp-compress [focus]",
+          execute: async (input) => {
+            if (compressPermission(state, config) === "deny") {
+              return;
+            }
+            const userFocus = input.prompt.text.trim();
+            await log(
+              `dcp-compress command executed: session=${input.sessionID} focus=${JSON.stringify(userFocus)}`,
+            );
+            const prompt = getTriggerPrompt("compress", state, config, userFocus);
+            state.manualMode = "compress-pending";
+            state.pendingManualTrigger = { sessionId: input.sessionID, prompt };
+            await ctx.session.prompt({
+              sessionID: input.sessionID,
+              text: prompt,
+              delivery: input.delivery,
+            });
+          },
         });
       });
     }

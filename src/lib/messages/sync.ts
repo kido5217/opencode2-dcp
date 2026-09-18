@@ -18,19 +18,22 @@ function sortBlocksByCreation(
   return a.blockId - b.blockId;
 }
 
-export const syncCompressionBlocks = (
+/**
+ * Shared block-sync core. v1 had a single message shape; v2 splits the
+ * request shape (`DcpMessage`, optional `id`) from the durable shape
+ * (`WithParts`, required `info.id`), so each world extracts its id set and
+ * hands it to this core (v1 `lib/messages/sync.ts` body, verbatim).
+ */
+export const syncCompressionBlocksForIds = (
   state: SessionState,
   logger: Logger,
-  messages: DcpMessage[],
+  messageIds: Set<string>,
 ): void => {
   const messagesState = state.prune.messages;
   if (!messagesState?.blocksById?.size) {
     return;
   }
 
-  const messageIds = new Set(
-    messages.map((msg) => msg.id).filter((id): id is string => typeof id === "string"),
-  );
   const previousActiveBlockIds = new Set<number>(
     Array.from(messagesState.blocksById.values())
       .filter((block) => block.active)
@@ -129,4 +132,15 @@ export const syncCompressionBlocks = (
       reactivatedCount,
     });
   }
+};
+
+export const syncCompressionBlocks = (
+  state: SessionState,
+  logger: Logger,
+  messages: DcpMessage[],
+): void => {
+  const messageIds = new Set(
+    messages.map((msg) => msg.id).filter((id): id is string => typeof id === "string"),
+  );
+  syncCompressionBlocksForIds(state, logger, messageIds);
 };

@@ -10,6 +10,8 @@ import type { WithParts } from "../src/lib/compress/withparts.ts";
 import type { DcpConfig } from "../src/config.ts";
 import type { ToolContext as CompressToolContext } from "../src/lib/compress/types.ts";
 import { Logger } from "../src/lib/logger.ts";
+import { handleDecompressCommand } from "../src/lib/commands/decompress.ts";
+import { handleRecompressCommand } from "../src/lib/commands/recompress.ts";
 
 const testDataHome = join(tmpdir(), `opencode-dcp-compression-groups-${process.pid}`);
 const testConfigHome = join(tmpdir(), `opencode-dcp-compression-groups-config-${process.pid}`);
@@ -266,4 +268,196 @@ test("compression blocks increment by tool call across range and message tools",
   assert.equal(blocks[0]?.blockId, 1);
   assert.equal(blocks[1]?.blockId, 2);
   assert.equal(blocks[2]?.blockId, 3);
+});
+
+test("decompress groups batched message compressions by tool call", async () => {
+  const sessionID = `ses_message_grouped_decompress_${Date.now()}`;
+  const rawMessages = buildMessages(sessionID);
+  const state = createSessionState();
+  const logger = new Logger(false);
+  const ignoredMessages: string[] = [];
+  const captureIgnoredMessage = async (text: string, _params: unknown) => {
+    ignoredMessages.push(text);
+  };
+
+  const tool = createCompressMessageTool({
+    deps: {
+      storage: mockStorage,
+      logger,
+      isSubAgentSession: async () => false,
+    },
+    fetchDurableMessages: async () => rawMessages,
+    state,
+    logger,
+    config: buildConfig("message"),
+    prompts: {
+      reload() {},
+      getRuntimePrompts() {
+        return { compressRange: "", compressMessage: "" };
+      },
+    },
+  } as unknown as CompressToolContext);
+
+  await tool.execute(
+    {
+      topic: "Batch stale notes",
+      content: [
+        {
+          messageId: "m0002",
+          topic: "Code path note",
+          summary: "Captured the assistant code-path findings.",
+        },
+        {
+          messageId: "m0003",
+          topic: "Task output note",
+          summary: "Captured the assistant task-backed follow-up.",
+        },
+      ],
+    },
+    {
+      id: "call-message-group",
+      progress: async () => {},
+      sessionID,
+      messageID: "msg-compress-message-group",
+    },
+  );
+
+  appendOriginMessage(rawMessages, sessionID, "msg-compress-message-group");
+
+  const blocks = Array.from(state.prune.messages.blocksById.values()).sort(
+    (a, b) => a.blockId - b.blockId,
+  );
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks[0]?.runId, blocks[1]?.runId);
+  assert.equal(blocks[0]?.batchTopic, "Batch stale notes");
+
+  await handleDecompressCommand({
+    state,
+    logger,
+    sessionId: sessionID,
+    messages: rawMessages,
+    args: [],
+    storage: mockStorage,
+    sendIgnoredMessage: captureIgnoredMessage,
+  });
+
+  const groupedListMessage = ignoredMessages.pop() || "";
+  assert.match(groupedListMessage, /Compression #1 - 2 messages - Batch stale notes/);
+  assert.doesNotMatch(groupedListMessage, /Code path note/);
+
+  await handleDecompressCommand({
+    state,
+    logger,
+    sessionId: sessionID,
+    messages: rawMessages,
+    args: [String(blocks[0]?.blockId || 1)],
+    storage: mockStorage,
+    sendIgnoredMessage: captureIgnoredMessage,
+  });
+
+  assert.ok(blocks.every((block) => block.deactivatedByUser));
+  assert.ok(blocks.every((block) => !block.active));
+
+  await handleRecompressCommand({
+    state,
+    logger,
+    sessionId: sessionID,
+    messages: rawMessages,
+    args: [String(blocks[0]?.blockId || 1)],
+    storage: mockStorage,
+    sendIgnoredMessage: captureIgnoredMessage,
+  });
+
+  assert.ok(blocks.every((block) => !block.deactivatedByUser));
+  assert.ok(blocks.every((block) => block.active));
+});
+
+test("decompress keeps batched ranges individually restorable", async () => {
+  const sessionID = `ses_range_individual_decompress_${Date.now()}`;
+  const rawMessages = buildMessages(sessionID);
+  const state = createSessionState();
+  const logger = new Logger(false);
+  const ignoredMessages: string[] = [];
+  const captureIgnoredMessage = async (text: string, _params: unknown) => {
+    ignoredMessages.push(text);
+  };
+
+  const tool = createCompressRangeTool({
+    deps: {
+      storage: mockStorage,
+      logger,
+      isSubAgentSession: async () => false,
+    },
+    fetchDurableMessages: async () => rawMessages,
+    state,
+    logger,
+    config: buildConfig("range"),
+    prompts: {
+      reload() {},
+      getRuntimePrompts() {
+        return { compressRange: "", compressMessage: "" };
+      },
+    },
+  } as unknown as CompressToolContext);
+
+  await tool.execute(
+    {
+      topic: "Batch stale notes",
+      content: [
+        {
+          startId: "m0001",
+          endId: "m0001",
+          summary: "Captured the opening user request.",
+        },
+        {
+          startId: "m0002",
+          endId: "m0002",
+          summary: "Captured the assistant code-path findings.",
+        },
+      ],
+    },
+    {
+      id: "call-range-group",
+      progress: async () => {},
+      sessionID,
+      messageID: "msg-compress-range-group",
+    },
+  );
+
+  appendOriginMessage(rawMessages, sessionID, "msg-compress-range-group");
+
+  const blocks = Array.from(state.prune.messages.blocksById.values()).sort(
+    (a, b) => a.blockId - b.blockId,
+  );
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks[0]?.runId, blocks[1]?.runId);
+
+  await handleDecompressCommand({
+    state,
+    logger,
+    sessionId: sessionID,
+    messages: rawMessages,
+    args: [],
+    storage: mockStorage,
+    sendIgnoredMessage: captureIgnoredMessage,
+  });
+
+  const listMessage = ignoredMessages.pop() || "";
+  assert.match(listMessage, /1 \(.+\)\s+Compression #1 - Batch stale notes/);
+  assert.match(listMessage, /2 \(.+\)\s+Compression #1 - Batch stale notes/);
+
+  await handleDecompressCommand({
+    state,
+    logger,
+    sessionId: sessionID,
+    messages: rawMessages,
+    args: [String(blocks[0]?.blockId || 1)],
+    storage: mockStorage,
+    sendIgnoredMessage: captureIgnoredMessage,
+  });
+
+  assert.equal(blocks[0]?.deactivatedByUser, true);
+  assert.equal(blocks[0]?.active, false);
+  assert.equal(blocks[1]?.active, true);
+  assert.equal(blocks[1]?.deactivatedByUser, false);
 });
