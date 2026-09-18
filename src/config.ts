@@ -277,12 +277,18 @@ function validateConfigTypes(data: Record<string, unknown>): string[] {
   return [...unknownMessages, ...messages];
 }
 
-function findOpencodeDir(startDir: string): string | null {
+export function findOpencodeDir(startDir: string): string | null {
   let current = startDir;
   while (current !== "/") {
     const candidate = join(current, ".opencode");
-    if (existsSync(candidate) && statSync(candidate).isDirectory()) {
-      return candidate;
+    if (existsSync(candidate)) {
+      try {
+        if (statSync(candidate).isDirectory()) {
+          return candidate;
+        }
+      } catch {
+        // ignore inaccessible entries while walking upward
+      }
     }
     const parent = dirname(current);
     if (parent === current) {
