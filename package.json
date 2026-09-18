@@ -16,7 +16,8 @@
   ],
   "scripts": {
     "test": "node --import tsx --test test/*.test.ts",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "build:tui": "node scripts/build-tui.mjs"
   },
   "dependencies": {
     "@anthropic-ai/tokenizer": "^0.0.4",
