@@ -40,7 +40,16 @@ function DcpKeymapMount(props: { context: Ctx }) {
         palette: true,
         slash: { name: "dcp" },
         run: () => {
-          props.context.ui.panel.open(PANEL_NAME);
+          const ctx = props.context;
+          if (ctx.ui.router.current().type !== "session") {
+            const sessions = ctx.data.session.list();
+            if (sessions.length === 0) return;
+            const latest = sessions.reduce((a, b) => (b.time.updated > a.time.updated ? b : a));
+            ctx.ui.router.navigate({ type: "session", sessionID: latest.id });
+            setTimeout(() => ctx.ui.panel.open(PANEL_NAME), 300);
+            return;
+          }
+          ctx.ui.panel.open(PANEL_NAME);
         },
       },
     ],
