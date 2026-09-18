@@ -11,3 +11,4 @@ Glossary for this project. No implementation details here.
 - **opencode-dcp.jsonc** — the port's config file (renamed from v1's `dcp.jsonc`).
 - **Boundary ID** — the `mNNNN` / `bN` tags that mark messages or compressed sections; input to the compress tool.
 - **Guiding error** — a validation failure surfaced to the model as recoverable guidance text (teach the correct shape, re-send), instead of aborting the work.
+- **Manual mode** — a mode in which compression is initiated explicitly by the user (`/dcp-compress`) rather than by DCP's automatic thresholds; the trigger starts a turn in which the model is expected to call the compress tool.
