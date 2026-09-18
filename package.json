@@ -5,9 +5,10 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./tui": "./tui.tsx"
+    "./tui": "./tui.mjs"
   },
   "files": [
+    "tui.mjs",
     "tui.tsx",
     "src",
     "dist",
