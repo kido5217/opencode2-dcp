@@ -11,7 +11,6 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup",
     "test": "node --import tsx --test test/",
     "format": "prettier --write ."
   },
