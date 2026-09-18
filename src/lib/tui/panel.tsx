@@ -6,13 +6,15 @@
  * Reads live data reactively from the `@opencode/plugin/tui` `Context`:
  *   - `data.session.get(id)`      → current session (tokens, title, model)
  *   - `data.location.model.list()`→ model catalog (context limit)
- *   - `storage.store(...)`        → the shared DCP docs (session state + all-time)
  *   - `client.session.context(id)`→ durable messages (for the context breakdown)
  *
- * The manual-mode toggle writes through the same durable store the core
- * plugin writes, so the panel and the pipeline always agree.
+ * The core's durable docs (session state + all-time) come through the
+ * `bridge` module: the panel opens the host DB read-only (`bun:sqlite`) and
+ * reads the same `kv` rows the core plugin writes, polling while the panel
+ * is open. The manual-mode toggle writes a mirror file the core re-reads on
+ * every context hook, so the panel and the pipeline always agree.
  */
-import { createMemo, createResource, createSignal, Show } from "solid-js";
+import { createMemo, createResource, createSignal, onCleanup, onMount, Show } from "solid-js";
 import type { JSX } from "solid-js";
 import { TextAttributes } from "@opentui/core";
 import { usePlugin } from "@opencode/plugin/tui";
@@ -22,6 +24,7 @@ import { analyzeContextTokens, type TokenBreakdown } from "../commands/context.t
 import { buildSessionStatsSummary, type SessionStatsSummary } from "../commands/stats.ts";
 import type { AggregatedStats } from "../state/persistence.ts";
 import { ALL_TIME_KEY } from "../state/persistence.ts";
+import { DCP_PLUGIN_ID, loadKvDoc, writeManualMirror } from "./bridge.ts";
 import { formatDuration, formatRatio, formatTokenCount, pct } from "../ui/utils.ts";
 import {
   PANEL_NAME,
@@ -101,16 +104,33 @@ function DcpPanel(props: {
     return modelContextLimit(props.context.data.location.model.list(props.context.location), model);
   });
 
-  const [docStore, docMutate] = props.context.storage.store<PanelDoc>(
-    `dcp/state/${props.sessionID}`,
-    { initial: emptyPanelDoc() },
-  );
-  const [allTimeStore] = props.context.storage.store<AllTimeDoc>(ALL_TIME_KEY, {
-    initial: zeroAllTime,
+  // The core's durable docs live in the host DB's `kv` table (the TUI's own
+  // `context.storage` is a separate backend); read them read-only and poll
+  // while the panel is open.
+  const [doc, setDoc] = createSignal<PanelDoc>(emptyPanelDoc());
+  const [allTime, setAllTime] = createSignal<AllTimeDoc>(zeroAllTime);
+
+  const refreshDocs = async () => {
+    const [sessionDoc, allTimeDoc] = await Promise.all([
+      loadKvDoc(DCP_PLUGIN_ID, `dcp/state/${props.sessionID}`),
+      loadKvDoc(DCP_PLUGIN_ID, ALL_TIME_KEY),
+    ]);
+    setDoc((sessionDoc as PanelDoc | undefined) ?? emptyPanelDoc());
+    setAllTime((allTimeDoc as AllTimeDoc | undefined) ?? zeroAllTime);
+  };
+
+  onMount(() => {
+    void refreshDocs();
+    const timer = setInterval(() => {
+      void refreshDocs();
+    }, 2000);
+    onCleanup(() => {
+      clearInterval(timer);
+    });
   });
 
   const state = createMemo(() =>
-    buildPanelState(docStore, props.sessionID, props.config.manualMode.enabled),
+    buildPanelState(doc(), props.sessionID, props.config.manualMode.enabled),
   );
 
   const [messages] = createResource(async () => {
@@ -135,8 +155,10 @@ function DcpPanel(props: {
   const manualActive = createMemo(() => state().manualMode !== false);
   const toggleManual = () => {
     const next = !manualActive();
-    void docMutate((draft) => {
-      draft.manualMode = next;
+    // Optimistic local update; the mirror file is what the core re-reads.
+    setDoc((prev) => ({ ...prev, manualMode: next }));
+    void writeManualMirror(props.sessionID, next).catch(() => {
+      // A failed mirror write must not crash the panel.
     });
   };
 
@@ -159,7 +181,7 @@ function DcpPanel(props: {
         <ContextScreen theme={theme} breakdown={breakdown} />
       </Show>
       <Show when={screen() === "stats"}>
-        <StatsScreen theme={theme} stats={stats} allTime={allTimeStats(allTimeStore)} />
+        <StatsScreen theme={theme} stats={stats} allTime={allTimeStats(allTime())} />
       </Show>
       <FrameFooter
         theme={theme}

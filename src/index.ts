@@ -23,6 +23,7 @@ import type { ToolContext as CompressToolContext } from "./lib/compress/types.ts
 import { toWithParts, type DurableMessage } from "./lib/compress/durable.ts";
 import { compressPermission } from "./lib/compress-permission.ts";
 import { getTriggerPrompt } from "./lib/manual.ts";
+import { readManualMirror } from "./lib/tui/bridge.ts";
 
 /** Structural mirror of the host JSON value type (for the storage adapter). */
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
@@ -68,13 +69,6 @@ export default Plugin.define({
           ),
     };
 
-    // PROBE(temp, #17): pin down the core storage backend's disk layout before
-    // wiring the panel's data bridge. Remove once mapped.
-    const probeKey = `dcp/probe/core-${Date.now()}`;
-    void storage.set(probeKey, { from: "core", at: new Date().toISOString() }).catch((error) => {
-      void log(`probe set failed: ${String(error)}`);
-    });
-
     const deps: ContextPipelineDeps = {
       state,
       config,
@@ -118,6 +112,19 @@ export default Plugin.define({
       if (typeof limit === "number" && limit > 0) {
         // v1 parity: only overwrite when the host value is truthy.
         state.modelContextLimit = limit;
+      }
+      // The panel's manual-mode toggle is written to a mirror file (the TUI
+      // entry and the core entry have SEPARATE storage backends); re-read it
+      // so the pipeline sees panel changes from the next model request on.
+      // Only applies while the in-memory mode is a plain boolean — the
+      // "compress-pending" string flow owns manualMode while it runs.
+      if (p.sessionID === state.sessionId && typeof state.manualMode === "boolean") {
+        const mirror = await readManualMirror(p.sessionID);
+        if (mirror && mirror.manualMode !== state.manualMode) {
+          state.manualMode = mirror.manualMode ? "active" : false;
+          void saveSessionState(state, storage, logger);
+          await log(`manual mode synced from panel: ${String(mirror.manualMode)}`);
+        }
       }
       try {
         await runContextPipeline(p, deps);

@@ -13,9 +13,11 @@
  * Gated on `config.enabled && config.commands.enabled` (mirrors the core
  * entry).
  */
+import { writeFile } from "node:fs/promises";
 import { Show } from "solid-js";
 import type { usePlugin } from "@opencode/plugin/tui";
 import { resolveDcpConfig } from "./config.ts";
+import { kvDbPath } from "./lib/tui/bridge.ts";
 import { PANEL_NAME } from "./lib/tui/data.ts";
 import { DcpPanelHost } from "./lib/tui/panel.tsx";
 
@@ -56,15 +58,31 @@ export default {
     });
     if (!config.enabled || !config.commands.enabled) return;
 
-    // PROBE(temp, #17): pin down the TUI storage backend's disk layout before
-    // wiring the panel's data bridge. Remove once mapped.
-    try {
-      context.storage.store("dcp-probe-tui", {
-        initial: { from: "tui", at: new Date().toISOString() },
-      });
-    } catch {
-      // Probe must never break plugin load.
-    }
+    // PROBE(temp, #17): verify the `bun:sqlite` read path the panel bridge
+    // uses from the TUI process; the result lands in /tmp/dcp-tui-probe.json.
+    // Remove once the smoke has read the panel docs through it.
+    void (async () => {
+      const probe: Record<string, unknown> = { at: new Date().toISOString() };
+      try {
+        const { Database } = await import("bun:sqlite");
+        const db = new Database(kvDbPath(), { readonly: true });
+        try {
+          const rows = db.query("select key from kv where key like '%dcp%' limit 5").all() as {
+            key: string;
+          }[];
+          probe.sqlite = { ok: true, keys: rows.map((row) => row.key) };
+        } finally {
+          db.close();
+        }
+      } catch (error) {
+        probe.sqlite = { ok: false, error: String(error) };
+      }
+      try {
+        await writeFile("/tmp/dcp-tui-probe.json", JSON.stringify(probe, null, 2));
+      } catch {
+        // Probe output is best-effort.
+      }
+    })();
 
     const releasePanelSlot = context.ui.slot({
       append: "session.panel",

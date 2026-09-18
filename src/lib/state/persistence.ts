@@ -23,9 +23,11 @@ export interface DcpStorage {
 const STATE_KEY_PREFIX = "dcp/state/";
 
 /**
- * The `/dcp` panel reads the all-time aggregate through the TUI storage
- * store; both hit the same kv row (same plugin id), so the core refreshes it
- * after every session-state save.
+ * All-time aggregate the core refreshes after every session-state save. The
+ * `/dcp` panel reads this same `kv` row directly from the host DB (see
+ * `src/lib/tui/bridge.ts`). NOTE: the TUI entry's `context.storage` is a
+ * SEPARATE backend from the core's `ctx.storage`, so no shared-store
+ * assumption holds across the two entries.
  */
 export const ALL_TIME_KEY = "dcp/panel/all-time";
 
