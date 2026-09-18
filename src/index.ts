@@ -2,6 +2,7 @@ import { mkdir, appendFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Plugin } from "@opencode/plugin";
+import { resolveDcpConfig } from "./config.ts";
 
 const LOG_DIR = join(homedir(), ".config", "opencode", "logs", "dcp");
 const LOG_FILE = join(LOG_DIR, "plugin.log");
@@ -19,6 +20,10 @@ export default Plugin.define({
   id: "opencode-dcp",
   async setup(ctx) {
     const controller = new AbortController();
+    const resolved = resolveDcpConfig({ startDir: ctx.location.directory });
+    for (const line of resolved.debugLines) {
+      await log(line);
+    }
     void (async () => {
       for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
         await log(`event ${event.type}`);
