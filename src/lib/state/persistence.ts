@@ -22,6 +22,13 @@ export interface DcpStorage {
 
 const STATE_KEY_PREFIX = "dcp/state/";
 
+/**
+ * The `/dcp` panel reads the all-time aggregate through the TUI storage
+ * store; both hit the same kv row (same plugin id), so the core refreshes it
+ * after every session-state save.
+ */
+export const ALL_TIME_KEY = "dcp/panel/all-time";
+
 /** Prune state as stored */
 export interface PersistedPruneMessagesState {
   byMessageId: Record<string, PrunedMessageEntry>;
@@ -96,6 +103,16 @@ export async function saveSessionState(
     };
 
     await writePersistedSessionState(storage, sessionState.sessionId, state, logger);
+
+    // Best-effort refresh of the panel's all-time aggregate (shared kv row).
+    void (async () => {
+      try {
+        const allTime = await loadAllSessionStats(storage, logger);
+        await storage.set(ALL_TIME_KEY, allTime);
+      } catch {
+        // Panel data is advisory; never fail the save for it.
+      }
+    })();
   } catch (error: unknown) {
     logger.error("Failed to save session state", {
       sessionId: sessionState.sessionId,

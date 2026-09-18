@@ -4,7 +4,8 @@
   "description": "Dynamic Context Pruning (DCP) for OpenCode v2",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./tui": "./src/tui.tsx"
   },
   "files": [
     "src",
@@ -22,8 +23,11 @@
     "jsonc-parser": "^3.3.1"
   },
   "devDependencies": {
+    "@opentui/core": "^0.5.11",
+    "@opentui/solid": "^0.5.11",
     "@types/node": "^26.6.1",
     "prettier": "^3.9.8",
+    "solid-js": "^1.9.12",
     "tsup": "^8.5.1",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2"

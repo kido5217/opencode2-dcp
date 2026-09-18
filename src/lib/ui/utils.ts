@@ -1,7 +1,6 @@
 /**
- * v2 port of the v1 `lib/ui/utils.ts` helpers the command handlers need.
- * The rest of the v1 module (stats formatting, etc.) ports with the `/dcp`
- * panel ticket.
+ * v2 port of the v1 `lib/ui/utils.ts` + `lib/tui/format.ts` helpers the
+ * command handlers and the `/dcp` panel need.
  */
 
 export function formatTokenCount(tokens: number, compact?: boolean): string {
@@ -10,4 +9,30 @@ export function formatTokenCount(tokens: number, compact?: boolean): string {
     return `${(tokens / 1000).toFixed(1)}K`.replace(".0K", "K") + suffix;
   }
   return tokens.toString() + suffix;
+}
+
+export function formatDuration(ms: number): string {
+  const safeMs = Math.max(0, Math.round(ms));
+  if (safeMs < 1000) return `${safeMs} ms`;
+
+  const totalSeconds = safeMs / 1000;
+  if (totalSeconds < 60) return `${totalSeconds.toFixed(1)} s`;
+
+  const wholeSeconds = Math.floor(totalSeconds);
+  const hours = Math.floor(wholeSeconds / 3600);
+  const minutes = Math.floor((wholeSeconds % 3600) / 60);
+  const seconds = wholeSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  return `${minutes}m ${seconds}s`;
+}
+
+export function formatRatio(inputTokens: number, outputTokens: number): string {
+  if (inputTokens <= 0) return "0:1";
+  if (outputTokens <= 0) return "∞:1";
+  return `${Math.max(1, Math.round(inputTokens / outputTokens))}:1`;
+}
+
+export function pct(value: number, total: number): string {
+  if (total <= 0) return "0.0%";
+  return `${((value / total) * 100).toFixed(1)}%`;
 }
