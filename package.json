@@ -1,0 +1,28 @@
+{
+  "name": "opencode-dcp",
+  "version": "0.1.0",
+  "description": "Dynamic Context Pruning (DCP) for OpenCode v2",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "node --import tsx --test test/",
+    "format": "prettier --write ."
+  },
+  "dependencies": {
+    "@opencode/plugin": "^2.0.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.1",
+    "prettier": "^3.9.8",
+    "tsup": "^8.5.1",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
+  }
+}
