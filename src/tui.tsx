@@ -4,51 +4,80 @@
  *
  * Registers:
  *   - a `session.panel` slot claim that renders the `/dcp` panel screens
- *   - a global keymap command (`/dcp` slash + palette) that opens the panel
+ *   - an `app` slot claim whose mount component registers the global keymap
+ *     command (`/dcp` slash + palette) that opens the panel. `keymap.layer`
+ *     must be called from inside a component in the host's tree ("owned by
+ *     the calling component"), so it cannot run from `setup` — there is no
+ *     Keymap.Provider there.
  *
  * Gated on `config.enabled && config.commands.enabled` (mirrors the core
- * entry). `writeDefault: false` keeps the TUI side effect-free: it only
- * reads/writes the shared DCP storage docs the core owns.
+ * entry).
  */
-import { Plugin } from "@opencode/plugin/tui";
+import { Show } from "solid-js";
+import type { usePlugin } from "@opencode/plugin/tui";
 import { resolveDcpConfig } from "./config.ts";
 import { PANEL_NAME } from "./lib/tui/data.ts";
 import { DcpPanelHost } from "./lib/tui/panel.tsx";
 
-export default Plugin.define({
+/** The host TUI context, derived from the public `usePlugin` API. */
+type Ctx = ReturnType<typeof usePlugin>;
+
+/**
+ * Renders nothing; its only job is to register the DCP keymap layer from
+ * inside the host component tree, where `keymap.layer` is legal.
+ */
+function DcpKeymapMount(props: { context: Ctx }) {
+  props.context.keymap.layer(() => ({
+    mode: "global",
+    commands: [
+      {
+        id: "dcp.panel",
+        title: "DCP panel",
+        description: "Show DCP context stats and manual controls",
+        group: "DCP",
+        palette: true,
+        slash: { name: "dcp" },
+        run: () => {
+          props.context.ui.panel.open(PANEL_NAME);
+        },
+      },
+    ],
+    bindings: ["dcp.panel"],
+  }));
+  return <Show when={false}>{() => <box />}</Show>;
+}
+
+export default {
   id: "opencode-dcp",
-  setup(context) {
+  setup(context: Ctx) {
     const { config } = resolveDcpConfig({
       startDir: context.location?.directory,
       writeDefault: false,
     });
     if (!config.enabled || !config.commands.enabled) return;
 
-    const releaseSlot = context.ui.slot({
+    // PROBE(temp, #17): pin down the TUI storage backend's disk layout before
+    // wiring the panel's data bridge. Remove once mapped.
+    try {
+      context.storage.store("dcp-probe-tui", {
+        initial: { from: "tui", at: new Date().toISOString() },
+      });
+    } catch {
+      // Probe must never break plugin load.
+    }
+
+    const releasePanelSlot = context.ui.slot({
       append: "session.panel",
       render: (panel) => <DcpPanelHost context={context} panel={panel} config={config} />,
     });
-
-    context.keymap.layer(() => ({
-      mode: "global",
-      commands: [
-        {
-          id: "dcp.panel",
-          title: "DCP panel",
-          description: "Show DCP context stats and manual controls",
-          group: "DCP",
-          palette: true,
-          slash: { name: "dcp" },
-          run: () => {
-            context.ui.panel.open(PANEL_NAME);
-          },
-        },
-      ],
-      bindings: ["dcp.panel"],
-    }));
+    const releaseKeymapMount = context.ui.slot({
+      append: "app",
+      render: () => <DcpKeymapMount context={context} />,
+    });
 
     return () => {
-      releaseSlot();
+      releasePanelSlot();
+      releaseKeymapMount();
     };
   },
-});
+};

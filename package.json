@@ -5,9 +5,10 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./tui": "./src/tui.tsx"
+    "./tui": "./tui.tsx"
   },
   "files": [
+    "tui.tsx",
     "src",
     "dist",
     "opencode-dcp.schema.json"

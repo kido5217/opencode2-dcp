@@ -68,6 +68,13 @@ export default Plugin.define({
           ),
     };
 
+    // PROBE(temp, #17): pin down the core storage backend's disk layout before
+    // wiring the panel's data bridge. Remove once mapped.
+    const probeKey = `dcp/probe/core-${Date.now()}`;
+    void storage.set(probeKey, { from: "core", at: new Date().toISOString() }).catch((error) => {
+      void log(`probe set failed: ${String(error)}`);
+    });
+
     const deps: ContextPipelineDeps = {
       state,
       config,
