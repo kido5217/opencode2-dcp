@@ -12,3 +12,4 @@ Glossary for this project. No implementation details here.
 - **Boundary ID** — the `mNNNN` / `bN` tags that mark messages or compressed sections; input to the compress tool.
 - **Guiding error** — a validation failure surfaced to the model as recoverable guidance text (teach the correct shape, re-send), instead of aborting the work.
 - **Manual mode** — a mode in which compression is initiated explicitly by the user (`/dcp-compress`) rather than by DCP's automatic thresholds; the trigger starts a turn in which the model is expected to call the compress tool.
+- **Context limit thresholds** — DCP-internal token thresholds, relative to the model's context window and overridable per model, that drive DCP's nudges (context-limit nudge above the max; turn and iteration nudges at/above the min). DCP-internal only: never written to the host's model metadata.
