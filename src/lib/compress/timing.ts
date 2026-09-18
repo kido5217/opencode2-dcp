@@ -1,10 +1,9 @@
 import type { SessionState } from "../types.ts";
-import { attachCompressionDuration } from "./attach.ts";
+import { attachCompressionDuration } from "./state.ts";
 
 /**
  * v2 port of v1 `lib/compress/timing.ts` (unchanged logic). The block-duration
- * attachment lives in `./attach.ts` — a #13 seam (the v1 implementation
- * mutates compression blocks, which the compress tool ticket ports).
+ * attachment lives in `./state.ts` (`attachCompressionDuration`).
  */
 
 export interface PendingCompressionDuration {

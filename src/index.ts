@@ -17,6 +17,10 @@ import {
 } from "./lib/pipeline.ts";
 import type { DcpStepTokens } from "./lib/types.ts";
 import type { DurableSessionMessage } from "./lib/subagents/subagent-results.ts";
+import { createCompressRangeTool } from "./lib/compress/range.ts";
+import { createCompressMessageTool } from "./lib/compress/message.ts";
+import type { ToolContext as CompressToolContext } from "./lib/compress/types.ts";
+import { toWithParts, type DurableMessage } from "./lib/compress/durable.ts";
 
 /** Structural mirror of the host JSON value type (for the storage adapter). */
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
@@ -116,6 +120,51 @@ export default Plugin.define({
         await log(`pipeline failed: ${String(error)}`);
       }
     });
+
+    // v1 parity: a single `compress` tool; the mode picks the factory and
+    // registration is skipped when permission is "deny". v2 enforces the
+    // permission declaratively via options { permission: "compress" } instead
+    // of v1's toolCtx.ask.
+    if (config.compress.permission !== "deny") {
+      const compressContext: CompressToolContext = {
+        state,
+        logger,
+        config,
+        prompts,
+        deps: {
+          storage,
+          logger,
+          isSubAgentSession: (sessionID) =>
+            isSubAgentSession(async (id) => {
+              const session = await ctx.session.get({ sessionID: id });
+              return { parentID: session.parentID };
+            }, sessionID),
+        },
+        fetchDurableMessages: async (sessionID) => {
+          const entries = await ctx.session.context({ sessionID });
+          return toWithParts(entries as unknown as DurableMessage[], sessionID);
+        },
+      };
+      const compressTool =
+        config.compress.mode === "message"
+          ? createCompressMessageTool(compressContext)
+          : createCompressRangeTool(compressContext);
+      void ctx.tool.transform((editor) => {
+        editor.add({
+          name: "compress",
+          description: compressTool.description,
+          input: compressTool.input,
+          options: { permission: "compress" },
+          execute: (input, context) =>
+            compressTool.execute(input, {
+              sessionID: context.sessionID,
+              messageID: context.messageID,
+              id: context.id,
+              progress: context.progress,
+            }),
+        });
+      });
+    }
 
     void (async () => {
       for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
